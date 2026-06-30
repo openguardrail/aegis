@@ -12,8 +12,8 @@ info:
 
     ## Extension Model
 
-    Three extension points — Dimension Evaluators, Validators, and Resolution
-    Strategies — define contracts (input/output schemas) independent of transport.
+    Three extension points - Dimension Evaluators, Validators, and Resolution
+    Strategies - define contracts (input/output schemas) independent of transport.
     This specification provides the HTTP/JSON binding. Implementations MAY
     support gRPC, in-process invocation, or message queues using the same schemas.
 
@@ -60,13 +60,13 @@ info:
     Implementations MUST evaluate in the following deterministic order. Earlier
     stages MAY short-circuit (hard deny) before later stages execute:
 
-    1. **Action classification** — Identify action type; READ → LOW immediately.
-    2. **Dimension evaluation** — Score across all registered dimensions.
-    3. **Temporal pattern check** — Detect bursts, cross-agent coordination.
-    4. **Conflict detection** — Check for concurrent actions on same target.
-    5. **Graduated validation** — Apply level-appropriate mechanism (bounds/consensus).
-    6. **Constraint/masking evaluation** — Determine if constrained execution is viable.
-    7. **Conformance logging** — Record the decision regardless of outcome.
+    1. **Action classification** - Identify action type; READ -> LOW immediately.
+    2. **Dimension evaluation** - Score across all registered dimensions.
+    3. **Temporal pattern check** - Detect bursts, cross-agent coordination.
+    4. **Conflict detection** - Check for concurrent actions on same target.
+    5. **Graduated validation** - Apply level-appropriate mechanism (bounds/consensus).
+    6. **Constraint/masking evaluation** - Determine if constrained execution is viable.
+    7. **Conformance logging** - Record the decision regardless of outcome.
 
     A BLOCKED decision at any stage MUST terminate evaluation immediately. An
     ESCALATED decision MUST hold the action and bypass subsequent stages.
@@ -104,7 +104,7 @@ servers:
 
 externalDocs:
   description: >-
-    Aegis Framework Specification — Guard Rail Validation for Autonomous AI Agent Decisions
+    Aegis Framework Specification - Guard Rail Validation for Autonomous AI Agent Decisions
   url: https://github.com/openguardrail/aegis
 
 tags:
@@ -253,7 +253,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '429':
-          description: Rate limit exceeded — too many validation submissions
+          description: Rate limit exceeded - too many validation submissions
           headers:
             Retry-After:
               description: Number of seconds to wait before retrying
@@ -270,7 +270,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '503':
-          description: Service unavailable — downstream validators unreachable
+          description: Service unavailable - downstream validators unreachable
           content:
             application/problem+json:
               schema:
@@ -343,7 +343,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '429':
-          description: Rate limit exceeded — too many validation submissions
+          description: Rate limit exceeded - too many validation submissions
           headers:
             Retry-After:
               description: Number of seconds to wait before retrying
@@ -360,7 +360,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '503':
-          description: Service unavailable — downstream validators unreachable
+          description: Service unavailable - downstream validators unreachable
           content:
             application/problem+json:
               schema:
@@ -614,7 +614,7 @@ paths:
                 $ref: '#/components/schemas/ProblemDetails'
         '412':
           description: >-
-            Precondition failed — the policy was modified since the provided
+            Precondition failed - the policy was modified since the provided
             ETag. Re-fetch the policy and retry.
           content:
             application/problem+json:
@@ -1257,7 +1257,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '410':
-          description: Approval expired — action was automatically BLOCKED
+          description: Approval expired - action was automatically BLOCKED
           content:
             application/problem+json:
               schema:
@@ -1334,7 +1334,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '410':
-          description: Approval expired — action was already automatically BLOCKED
+          description: Approval expired - action was already automatically BLOCKED
           content:
             application/problem+json:
               schema:
@@ -1349,7 +1349,7 @@ paths:
                 $ref: '#/components/schemas/ProblemDetails'
 
 # ============================================================
-# EXTENSION CONTRACTS — HTTP Binding
+# EXTENSION CONTRACTS - HTTP Binding
 #
 # These define the input/output schemas for extension points.
 # This section provides the HTTP/JSON transport binding.
@@ -1558,7 +1558,7 @@ components:
 
   responses:
     RateLimited:
-      description: Rate limit exceeded — too many requests
+      description: Rate limit exceeded - too many requests
       headers:
         Retry-After:
           description: Number of seconds to wait before retrying
@@ -2292,7 +2292,7 @@ components:
           description: >-
             Maximum time in milliseconds to wait for this validator's response.
             If exceeded, the validator is excluded from consensus and the timeout
-            is logged. This is an engine-internal timeout — not a validator verdict.
+            is logged. This is an engine-internal timeout - not a validator verdict.
         supported_action_types:
           type: array
           items:
@@ -2539,7 +2539,7 @@ components:
           type: string
           description: >-
             Machine-readable application error cause specific to this occurrence.
-            Stable across versions — clients MAY switch on this value.
+            Stable across versions - clients MAY switch on this value.
           examples:
             - INVALID_ACTION
             - POLICY_VIOLATION
