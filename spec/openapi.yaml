@@ -1,0 +1,2576 @@
+openapi: 3.1.0
+info:
+  title: Aegis - Guard Rail Validation Framework
+  description: |
+    Runtime security specification for autonomous AI agent decisions.
+    Evaluates every action against configurable risk dimensions, enforces
+    graduated validation policies, and produces regulatory-grade audit records.
+
+    The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+    "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this
+    document are to be interpreted as described in RFC 2119.
+
+    ## Extension Model
+
+    Three extension points — Dimension Evaluators, Validators, and Resolution
+    Strategies — define contracts (input/output schemas) independent of transport.
+    This specification provides the HTTP/JSON binding. Implementations MAY
+    support gRPC, in-process invocation, or message queues using the same schemas.
+
+    Trust lifecycle management (tool trust state, cascade propagation, session
+    enforcement) is an upstream concern outside the scope of this specification.
+    Implementations MAY integrate external trust state via a registered dimension
+    evaluator that maps trust levels to risk scores.
+
+    ## Versioning
+
+    Path-based versioning (`/v1/`). Breaking changes increment the major version.
+    Non-breaking additions do not require a version bump. Clients MUST handle
+    unknown fields gracefully.
+
+    ## Authentication
+
+    All endpoints require authentication by default (OAuth2 client credentials,
+    Bearer JWT, or API key). For trusted-network deployments, operators MAY
+    disable authentication at the gateway level.
+
+    ## Rate Limiting
+
+    Validation endpoints MUST enforce rate limiting. HTTP 429 responses
+    MUST include a `Retry-After` header.
+
+    ## Safety Invariants
+
+    Conforming implementations MUST satisfy the following fail-safe properties:
+
+    1. If all dimension evaluators are unreachable, treat the action as MEDIUM
+       criticality (never silently allow). Note: individual dimension timeouts
+       default to 0.0; this invariant applies only when ALL registered
+       dimensions fail simultaneously.
+    2. If all validators timeout on a HIGH/CRITICAL action, the outcome MUST be
+       ESCALATED (never silently approve without consensus).
+    3. If the engine encounters an internal error during evaluation, the outcome
+       MUST be ESCALATED with `safety_invariant_triggered: true`.
+    4. The engine MUST never produce EXECUTED for a CRITICAL action without
+       receiving at least the configured minimum validator responses.
+    5. READ actions MUST always receive LOW criticality regardless of other signals.
+
+    ## Evaluation Order
+
+    Implementations MUST evaluate in the following deterministic order. Earlier
+    stages MAY short-circuit (hard deny) before later stages execute:
+
+    1. **Action classification** — Identify action type; READ → LOW immediately.
+    2. **Dimension evaluation** — Score across all registered dimensions.
+    3. **Temporal pattern check** — Detect bursts, cross-agent coordination.
+    4. **Conflict detection** — Check for concurrent actions on same target.
+    5. **Graduated validation** — Apply level-appropriate mechanism (bounds/consensus).
+    6. **Constraint/masking evaluation** — Determine if constrained execution is viable.
+    7. **Conformance logging** — Record the decision regardless of outcome.
+
+    A BLOCKED decision at any stage MUST terminate evaluation immediately. An
+    ESCALATED decision MUST hold the action and bypass subsequent stages.
+
+    ## Request Tracing
+
+    Include `X-Request-ID` for distributed tracing. The engine echoes or
+    generates this header in all responses.
+
+    ---
+    © 2026 OpenGuardrail Contributors. Licensed under Apache-2.0.
+  version: 0.1.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: OpenGuardrail
+    url: https://github.com/openguardrail/aegis
+    email: oss@openguardrail.io
+
+servers:
+  - url: 'https://{host}:{port}/v1'
+    description: Aegis service endpoint. Replace host and port for your deployment.
+    variables:
+      host:
+        default: aegis.local
+        enum:
+          - aegis.local
+        description: Hostname of the Aegis deployment.
+      port:
+        default: '8443'
+        enum:
+          - '8443'
+        description: Port number for the Aegis service.
+
+externalDocs:
+  description: >-
+    Aegis Framework Specification — Guard Rail Validation for Autonomous AI Agent Decisions
+  url: https://github.com/openguardrail/aegis
+
+tags:
+  - name: Validation
+    description: Action validation and decision management
+  - name: Policy
+    description: Policy and registry management
+  - name: Monitoring
+    description: Operational statistics, health, and anomaly detection
+  - name: Events
+    description: Decision event subscriptions and notifications
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+  - oAuth2ClientCredentials:
+      - aegis:validate
+
+paths:
+
+  # ============================================================
+  # Validation
+  # ============================================================
+
+  /actions/validate:
+    post:
+      operationId: validateAction
+      tags: [Validation]
+      summary: Submit a proposed action for guard rail validation
+      description: |
+        Returns a synchronous validation decision for the proposed action.
+        The response includes the criticality assessment, validator verdicts
+        (if applicable), and the complete audit record.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProposedAction'
+            example:
+              agent:
+                agent_id: "rapp-energy-001"
+                agent_name: "Energy Saving Optimizer"
+                role: PRIMARY
+                vendor: "VendorA"
+              action_type: DEACTIVATE
+              target:
+                entity_id: "cell-7829"
+                entity_type: "NRCellDU"
+                parameters:
+                  affected_subscribers: 50000
+                  slice_type: EMERGENCY
+                  is_last_serving: true
+              proposed_values:
+                activationStatus: DEACTIVATED
+              current_values:
+                activationStatus: ACTIVATED
+              confidence: 0.82
+              rationale: "Energy consumption reduction during off-peak hours"
+      responses:
+        '200':
+          description: Validation completed successfully
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/X-RateLimit-Reset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionRecord'
+              example:
+                decision_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                timestamp: "2026-06-30T20:30:00.000Z"
+                proposed_action:
+                  action_id: "f0e1d2c3-b4a5-6789-0fed-cba987654321"
+                  agent:
+                    agent_id: "rapp-energy-001"
+                    agent_name: "Energy Saving Optimizer"
+                    role: PRIMARY
+                    vendor: "VendorA"
+                  action_type: DEACTIVATE
+                  target:
+                    entity_id: "cell-7829"
+                    entity_type: "NRCellDU"
+                    parameters:
+                      affected_subscribers: 50000
+                      slice_type: EMERGENCY
+                      is_last_serving: true
+                  proposed_values:
+                    activationStatus: DEACTIVATED
+                  current_values:
+                    activationStatus: ACTIVATED
+                  confidence: 0.82
+                  rationale: "Energy consumption reduction during off-peak hours"
+                criticality:
+                  composite: 0.91
+                  level: CRITICAL
+                  dimensions:
+                    service_impact: 0.95
+                    safety: 0.88
+                validation_responses:
+                  - validator:
+                      agent_id: "validator-safety-001"
+                      agent_name: "Safety Validator"
+                      role: VALIDATOR
+                    verdict: DISAGREE
+                    confidence: 0.97
+                    rationale: "Cannot deactivate last serving cell for emergency slice"
+                    response_time_ms: 45
+                outcome: BLOCKED
+                violation_type: VALIDATION_FAILED
+                processing_time_ms: 120
+                rationale: "Blocked: safety validator vetoed deactivation of last serving emergency cell"
+        '400':
+          description: Malformed request body
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to submit actions for validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Invalid action payload (syntactically valid JSON but semantically incorrect)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Rate limit exceeded — too many validation submissions
+          headers:
+            Retry-After:
+              description: Number of seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '503':
+          description: Service unavailable — downstream validators unreachable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /actions/validate/async:
+    post:
+      operationId: validateActionAsync
+      tags: [Validation]
+      summary: Submit action for asynchronous validation
+      description: |
+        Accepts a proposed action for evaluation and returns immediately with a
+        pending decision identifier. Use the returned poll URL to retrieve the
+        final decision once processing completes. Callers that cannot tolerate
+        synchronous wait times SHOULD use this endpoint.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProposedAction'
+      responses:
+        '202':
+          description: Accepted for processing
+          headers:
+            Location:
+              description: URL to poll for the completed decision result
+              schema:
+                type: string
+                format: uri
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+            X-RateLimit-Limit:
+              $ref: '#/components/headers/X-RateLimit-Limit'
+            X-RateLimit-Remaining:
+              $ref: '#/components/headers/X-RateLimit-Remaining'
+            X-RateLimit-Reset:
+              $ref: '#/components/headers/X-RateLimit-Reset'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AsyncValidationResponse'
+        '400':
+          description: Malformed request body
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to submit actions for validation
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Invalid action payload
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          description: Rate limit exceeded — too many validation submissions
+          headers:
+            Retry-After:
+              description: Number of seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '503':
+          description: Service unavailable — downstream validators unreachable
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /decisions/{decision_id}:
+    get:
+      operationId: getDecision
+      tags: [Validation]
+      summary: Get decision record by ID
+      description: >-
+        Retrieves a single decision record by its unique identifier, including the
+        full audit trail of criticality scoring, validator responses, and outcome.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+        - name: decision_id
+          in: path
+          required: true
+          description: Unique identifier of the decision record to retrieve
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Decision record found
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionRecord'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to view this decision
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Decision not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /decisions:
+    get:
+      operationId: listDecisions
+      tags: [Validation]
+      summary: Query decision audit log
+      description: >-
+        Returns a paginated list of decision records matching optional filter
+        criteria such as agent, outcome, criticality level, and time range.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+        - name: agent_id
+          in: query
+          description: Filter decisions by the submitting agent identifier
+          schema:
+            type: string
+        - name: outcome
+          in: query
+          description: Filter decisions by validation outcome
+          schema:
+            $ref: '#/components/schemas/ValidationOutcome'
+        - name: criticality_level
+          in: query
+          description: Filter decisions by criticality level
+          schema:
+            $ref: '#/components/schemas/CriticalityLevel'
+        - name: since
+          in: query
+          description: Return only decisions created after this timestamp (inclusive)
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          description: Maximum number of decision records to return per page
+          schema:
+            type: integer
+            default: 50
+            maximum: 500
+        - name: offset
+          in: query
+          description: Number of records to skip for offset-based pagination
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: cursor
+          in: query
+          description: Opaque cursor for efficient keyset pagination (alternative to offset)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of decision records matching the query criteria
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionListResponse'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to query decisions
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # ============================================================
+  # Policy & Registry
+  # ============================================================
+
+  /policy:
+    get:
+      operationId: getPolicy
+      tags: [Policy]
+      summary: Get the active policy configuration
+      description: >-
+        Retrieves the current active policy configuration including level thresholds,
+        consensus settings, temporal detection parameters, and conflict resolution rules.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      responses:
+        '200':
+          description: Current active policy configuration
+          headers:
+            ETag:
+              description: >-
+                Entity tag for the current policy revision. Use this value in
+                the If-Match header when updating the policy to ensure optimistic
+                concurrency control.
+              schema:
+                type: string
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AegisPolicy'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    put:
+      operationId: updatePolicy
+      tags: [Policy]
+      summary: Update policy configuration
+      description: |
+        Replaces the active policy configuration. Use the ETag from GET /policy
+        in the If-Match header to prevent lost updates via optimistic locking.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+        - name: If-Match
+          in: header
+          required: true
+          description: >-
+            ETag value from a prior GET /policy response. The server rejects the
+            update with 412 Precondition Failed if the policy has been modified
+            since the ETag was issued.
+          schema:
+            type: string
+      security:
+        - BearerAuth: []
+        - oAuth2ClientCredentials:
+            - aegis:policy:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AegisPolicy'
+      responses:
+        '200':
+          description: Policy updated successfully
+          headers:
+            ETag:
+              description: New ETag for the updated policy revision
+              schema:
+                type: string
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AegisPolicy'
+        '400':
+          description: Malformed request body
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to update policy
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '412':
+          description: >-
+            Precondition failed — the policy was modified since the provided
+            ETag. Re-fetch the policy and retry.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '422':
+          description: Invalid policy (semantically incorrect configuration)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /dimensions:
+    get:
+      operationId: listDimensions
+      tags: [Policy]
+      summary: List registered dimension evaluators
+      description: >-
+        Returns all currently registered dimension evaluators with their configuration
+        including name, weight, callback URL, and timeout settings.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      responses:
+        '200':
+          description: List of all registered dimension evaluators
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DimensionRegistration'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    post:
+      operationId: registerDimension
+      tags: [Policy]
+      summary: Register a new dimension evaluator
+      description: >-
+        Registers a new dimension evaluator to participate in criticality scoring.
+        The evaluator is immediately active and will be invoked during subsequent validations.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DimensionRegistration'
+      responses:
+        '201':
+          description: Dimension evaluator registered successfully
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DimensionRegistration'
+        '400':
+          description: Malformed request body
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to register dimensions
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '409':
+          description: Dimension with this name already exists
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /dimensions/{name}:
+    delete:
+      operationId: deregisterDimension
+      tags: [Policy]
+      summary: Remove a dimension evaluator
+      description: >-
+        Removes a registered dimension evaluator by name. The evaluator is immediately
+        excluded from subsequent criticality scoring calculations.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+        - name: name
+          in: path
+          required: true
+          description: Unique name of the dimension evaluator to remove
+          schema:
+            type: string
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Dimension evaluator removed successfully
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to deregister dimensions
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Dimension not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /validators:
+    get:
+      operationId: listValidators
+      tags: [Policy]
+      summary: List registered validators
+      description: >-
+        Returns all currently registered validators with their agent identity,
+        callback configuration, timeout, and supported action types.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      responses:
+        '200':
+          description: List of all registered validators
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ValidatorRegistration'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    post:
+      operationId: registerValidator
+      tags: [Policy]
+      summary: Register a new validator
+      description: >-
+        Registers a new validator to participate in consensus voting for HIGH and
+        CRITICAL decisions. The validator is immediately eligible for invocation.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidatorRegistration'
+      responses:
+        '201':
+          description: Validator registered successfully
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidatorRegistration'
+        '400':
+          description: Malformed request body
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to register validators
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /validators/{agent_id}:
+    delete:
+      operationId: deregisterValidator
+      tags: [Policy]
+      summary: Remove a validator
+      description: >-
+        Removes a registered validator by agent identifier. The validator is
+        immediately excluded from subsequent consensus voting rounds.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+        - name: agent_id
+          in: path
+          required: true
+          description: Unique agent identifier of the validator to remove
+          schema:
+            type: string
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Validator removed successfully
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to deregister validators
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Validator not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # ============================================================
+  # Monitoring
+  # ============================================================
+
+  /stats:
+    get:
+      operationId: getStats
+      tags: [Monitoring]
+      summary: Get operational statistics
+      description: >-
+        Returns aggregate operational statistics including decision counts by level
+        and outcome, average processing time, and uptime since last restart.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      responses:
+        '200':
+          description: Aggregate operational statistics
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineStats'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /health:
+    get:
+      operationId: healthCheck
+      tags: [Monitoring]
+      summary: Health check
+      description: |
+        Returns the operational health status including availability of
+        downstream validators and dimension evaluators. This endpoint
+        requires no authentication and is suitable for load balancer probes.
+      security: []
+      responses:
+        '200':
+          description: Service is healthy or degraded but operational
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '503':
+          description: Service is unhealthy and unable to process requests
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /temporal/patterns:
+    get:
+      operationId: getTemporalPatterns
+      tags: [Monitoring]
+      summary: Get active temporal pattern detection state
+      description: |
+        Returns the current state of anomaly detection including active alerts,
+        agents under rate restriction, and recently detected coordination patterns.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      responses:
+        '200':
+          description: Current temporal pattern detection state
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TemporalState'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # ============================================================
+  # Event Subscriptions
+  # ============================================================
+
+  /subscriptions:
+    get:
+      operationId: listSubscriptions
+      tags: [Events]
+      summary: List event subscriptions
+      description: >-
+        Returns all active event subscriptions including their callback URLs,
+        filter criteria, and creation timestamps.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of active event subscriptions
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/EventSubscription'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to list subscriptions
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+    post:
+      operationId: createSubscription
+      tags: [Events]
+      summary: Subscribe to decision events
+      description: |
+        Registers a callback endpoint to receive decision event notifications
+        matching the specified filter criteria.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventSubscription'
+      responses:
+        '201':
+          description: Subscription created successfully
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventSubscription'
+        '400':
+          description: Malformed request body
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to create subscriptions
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /subscriptions/{subscription_id}:
+    delete:
+      operationId: deleteSubscription
+      tags: [Events]
+      summary: Remove an event subscription
+      description: >-
+        Deletes an event subscription by its unique identifier. No further
+        notifications are delivered to the subscription callback after removal.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+        - name: subscription_id
+          in: path
+          required: true
+          description: Unique identifier of the subscription to remove
+          schema:
+            type: string
+            format: uuid
+      security:
+        - BearerAuth: []
+      responses:
+        '204':
+          description: Subscription removed successfully
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Insufficient permissions to delete subscriptions
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Subscription not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # ============================================================
+  # Approvals
+  # ============================================================
+
+  /approvals/{approval_id}/approve:
+    post:
+      operationId: approveAction
+      tags: [Validation]
+      summary: Approve an escalated action
+      description: >-
+        Releases a held action that received an ESCALATED outcome. The action
+        proceeds to execution after approval. The approver MUST hold one of the
+        roles listed in the approval's approver_roles field.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+        - name: approval_id
+          in: path
+          required: true
+          description: Approval identifier from the DecisionRecord.approval object
+          schema:
+            type: string
+            format: uuid
+      security:
+        - BearerAuth: []
+        - oAuth2ClientCredentials:
+            - aegis:admin
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                approver_id:
+                  type: string
+                  description: Identifier of the person or system granting approval
+                comment:
+                  type: [string, "null"]
+                  description: Optional comment explaining the approval decision
+      responses:
+        '200':
+          description: Action approved and released for execution
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionRecord'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Caller does not hold a required approver role
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Approval not found or already resolved
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '410':
+          description: Approval expired — action was automatically BLOCKED
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /approvals/{approval_id}/reject:
+    post:
+      operationId: rejectAction
+      tags: [Validation]
+      summary: Reject an escalated action
+      description: >-
+        Rejects a held action. The action is permanently BLOCKED and the
+        decision record is updated with the rejection rationale.
+      parameters:
+        - $ref: '#/components/parameters/X-Request-ID'
+        - name: approval_id
+          in: path
+          required: true
+          description: Approval identifier from the DecisionRecord.approval object
+          schema:
+            type: string
+            format: uuid
+      security:
+        - BearerAuth: []
+        - oAuth2ClientCredentials:
+            - aegis:admin
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                approver_id:
+                  type: string
+                  description: Identifier of the person or system rejecting the action
+                reason:
+                  type: [string, "null"]
+                  description: Reason for rejection (stored in audit trail)
+      responses:
+        '200':
+          description: Action rejected and permanently BLOCKED
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/X-Request-ID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionRecord'
+        '401':
+          description: Authentication credentials missing or invalid
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '403':
+          description: Caller does not hold a required approver role
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Approval not found or already resolved
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '410':
+          description: Approval expired — action was already automatically BLOCKED
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          description: Unexpected processing error. Retry with the same X-Request-ID.
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+# ============================================================
+# EXTENSION CONTRACTS — HTTP Binding
+#
+# These define the input/output schemas for extension points.
+# This section provides the HTTP/JSON transport binding.
+# Implementations MAY support alternative transports (gRPC,
+# in-process, message queue) using the same request/response schemas.
+# ============================================================
+
+webhooks:
+
+  dimensionEvaluate:
+    post:
+      operationId: dimensionEvaluateWebhook
+      summary: Dimension evaluator contract
+      description: |
+        Invoked during criticality evaluation for each registered dimension.
+        MUST return a score between 0.0 and 1.0.
+
+        ## Delivery Semantics
+
+        - Timeout: per-dimension, configured in `DimensionRegistration.timeout_ms`
+          (default 100ms).
+        - On timeout, the dimension score MUST default to 0.0 (no risk) and
+          a timeout event MUST be logged.
+        - On non-2xx response, the dimension MUST be treated as unavailable
+          with a score of 0.0.
+        - Implementations SHOULD respond within 50ms for optimal latency.
+        - Failed invocations MUST NOT be retried to avoid cascading delays.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProposedAction'
+      responses:
+        '200':
+          description: Dimension score with optional rationale
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DimensionScore'
+
+  validatorValidate:
+    post:
+      operationId: validatorValidateWebhook
+      summary: Validator contract
+      description: |
+        Invoked for HIGH and CRITICAL decisions during consensus voting.
+        MUST return AGREE, DISAGREE, or UNCERTAIN with rationale.
+
+        ## Delivery Semantics
+
+        - Timeout: per-validator, configured in `ValidatorRegistration.timeout_ms`
+          (default 3000ms for HIGH, 5000ms for CRITICAL per `ConsensusConfig`).
+        - On timeout, the validator MUST be excluded from consensus calculation
+          and the timeout event MUST be logged. Consensus proceeds with remaining responses.
+        - On non-2xx response, the validator MUST be treated as non-responsive
+          (equivalent to timeout).
+        - For CRITICAL decisions, the full timeout MUST elapse before consensus
+          is computed to maximize validator participation.
+        - Failed invocations MUST NOT be retried within a single validation
+          cycle.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidationRequest'
+      responses:
+        '200':
+          description: Validation verdict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResponse'
+
+  resolverResolve:
+    post:
+      operationId: resolverResolveWebhook
+      summary: Conflict resolution strategy contract
+      description: |
+        Invoked when conflicting actions target the same entity within the
+        conflict detection window. MUST return the action_id of the winner.
+
+        ## Delivery Semantics
+
+        - Timeout: 5000ms (system-level, not configurable per-resolver).
+        - On timeout, the built-in criticality-weighted resolution strategy
+          MUST be applied as fallback.
+        - On non-2xx response, the failure MUST be logged and the built-in
+          fallback strategy MUST be applied.
+        - Failed invocations MUST NOT be retried.
+        - On fallback, the DecisionRecord `rationale` field MUST indicate
+          that the external resolver was unavailable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConflictResolutionRequest'
+      responses:
+        '200':
+          description: Resolution decision indicating the winning action
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictResolutionResponse'
+
+  decisionNotification:
+    post:
+      operationId: decisionNotificationWebhook
+      summary: Decision event notification
+      description: |
+        Invoked for each decision matching an active subscription filter.
+
+        ## Delivery Semantics
+
+        - Delivery timeout: 3000ms.
+        - Delivery MUST NOT block validation processing.
+        - On timeout or non-2xx response, the service MUST retry with
+          exponential backoff (maximum 3 attempts over 60 seconds).
+        - After retry exhaustion, the notification is dropped and a
+          delivery failure is recorded.
+        - Subscriptions exceeding 90% failure rate over 1 hour MAY be
+          automatically disabled.
+        - Implementations SHOULD return 200 immediately and process
+          the payload asynchronously.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRecord'
+      responses:
+        '200':
+          description: Notification acknowledged successfully
+
+# ============================================================
+# COMPONENTS
+# ============================================================
+
+components:
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        JWT token for API access. Tokens SHOULD include an audience claim
+        scoped to the Aegis deployment.
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        Static API key for service-to-service calls in trusted network
+        environments.
+    oAuth2ClientCredentials:
+      type: oauth2
+      description: >-
+        OAuth 2.0 client credentials flow for machine-to-machine authentication.
+        Recommended for production multi-tenant deployments.
+      flows:
+        clientCredentials:
+          tokenUrl: '/oauth2/token'
+          scopes:
+            aegis:validate: Submit actions for validation
+            aegis:decisions:read: Query decision audit log
+            aegis:policy:write: Update policy and manage registrations
+            aegis:admin: Full administrative access
+
+  parameters:
+    X-Request-ID:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: >-
+        Unique request identifier for distributed tracing and log correlation.
+        If not provided by the client, the engine generates one and includes it
+        in the response. Clients SHOULD propagate this value across service boundaries.
+      schema:
+        type: string
+        format: uuid
+      example: "550e8400-e29b-41d4-a716-446655440000"
+
+  headers:
+    X-Request-ID:
+      description: >-
+        Unique request identifier echoed from the request or generated by the engine.
+        Use this value for log correlation and support inquiries.
+      schema:
+        type: string
+        format: uuid
+    X-RateLimit-Limit:
+      description: Maximum number of requests permitted within the current rate limit window.
+      schema:
+        type: integer
+    X-RateLimit-Remaining:
+      description: Number of requests remaining in the current rate limit window.
+      schema:
+        type: integer
+    X-RateLimit-Reset:
+      description: Unix timestamp (seconds since epoch) at which the current rate limit window resets.
+      schema:
+        type: integer
+
+  responses:
+    RateLimited:
+      description: Rate limit exceeded — too many requests
+      headers:
+        Retry-After:
+          description: Number of seconds to wait before retrying
+          schema:
+            type: integer
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+  schemas:
+
+    # --- Core Models ---
+
+    AgentIdentity:
+      type: object
+      required: [agent_id, agent_name, role]
+      properties:
+        agent_id:
+          type: string
+          minLength: 1
+          description: >-
+            Unique identifier for the agent within the Aegis deployment. MUST
+            be non-empty, MUST be unique across all registered agents, and MUST
+            be stable across agent restarts. SHOULD use the same identifier as
+            the agent's management system (e.g., 3GPP Distinguished Name, O-RAN
+            instance ID, Kubernetes resource name).
+          examples:
+            - "rapp-energy-001"
+            - "SubNetwork=Europe,ManagedElement=gNB-1042,ManagedFunction=rApp-energy"
+            - "urn:ericsson:rapp:energy-optimizer:v2"
+        agent_name:
+          type: string
+          description: >-
+            Human-readable display name for the agent. Used in UI, logs, and
+            audit records. No uniqueness requirement.
+        role:
+          $ref: '#/components/schemas/AgentRole'
+        vendor:
+          type: [string, "null"]
+          description: >-
+            Vendor or organization responsible for this agent. Used for
+            multi-vendor conflict resolution and audit grouping.
+        deployment_timestamp:
+          type: string
+          format: date-time
+          description: Timestamp when this agent was deployed or last restarted
+      description: >-
+        Identity of an AI agent. Trust lifecycle management is handled by
+        external systems and is outside the scope of this specification.
+
+    AgentRole:
+      type: string
+      description: >-
+        Role of the agent in the Aegis framework. PRIMARY agents submit actions
+        for validation. VALIDATOR agents participate in consensus voting for
+        HIGH and CRITICAL decisions.
+      enum: [PRIMARY, VALIDATOR]
+
+    ActionTarget:
+      type: object
+      required: [entity_id, entity_type]
+      properties:
+        entity_id:
+          type: string
+          minLength: 1
+          description: >-
+            Unique identifier of the target entity. MUST be non-empty and MUST
+            be consistent across actions targeting the same entity (required for
+            conflict detection). SHOULD use the same identifier as the entity's
+            management system (e.g., 3GPP DN, Kubernetes resource UID, cloud
+            resource ARN).
+          examples:
+            - "cell-7829"
+            - "ManagedElement=gNB-1042,NRCellDU=cell-7829"
+            - "arn:aws:ec2:us-east-1:123456789:instance/i-abc123"
+        entity_type:
+          type: string
+          description: >-
+            Type classification of the target entity (e.g., "NRCellDU", "VM",
+            "Pod", "Robot"). Used by dimension evaluators for domain-specific scoring.
+        parameters:
+          type: object
+          additionalProperties: true
+          description: |
+            Domain-specific context parameters consumed by dimension evaluators.
+            The schema of this object is defined by the domain adapter, not by
+            the framework. The engine passes this opaquely to dimension evaluators.
+            Examples: affected_subscribers, slice_type, is_last_serving.
+
+    ActionType:
+      type: string
+      description: |
+        Action classification string. The framework defines common values
+        but does NOT restrict to a fixed enum. Domain adapters define
+        additional types as needed.
+
+        Common values: READ, CONFIGURE, ACTIVATE, DEACTIVATE, SCALE, HANDOVER,
+        DEPLOY, ROLLBACK, MIGRATE, RESTART, MOVE, GRIP, RELEASE.
+
+        The only framework-reserved value is READ, which always receives
+        LOW criticality regardless of dimension scores.
+      examples:
+        - READ
+        - CONFIGURE
+        - DEACTIVATE
+        - DEPLOY
+        - MIGRATE
+
+    ProposedAction:
+      type: object
+      required: [agent, action_type, target, proposed_values]
+      properties:
+        action_id:
+          type: string
+          format: uuid
+          description: >-
+            Unique identifier for this action. Auto-generated by the engine if
+            not provided by the submitting agent.
+        timestamp:
+          type: string
+          format: date-time
+          description: >-
+            Timestamp when the action was proposed. Auto-set by the engine if
+            not provided. Used for temporal pattern detection.
+        agent:
+          $ref: '#/components/schemas/AgentIdentity'
+          description: Identity of the agent proposing this action
+        action_type:
+          $ref: '#/components/schemas/ActionType'
+          description: Classification of the proposed action
+        target:
+          $ref: '#/components/schemas/ActionTarget'
+          description: The entity this action targets
+        proposed_values:
+          type: object
+          additionalProperties: true
+          description: >-
+            Key-value map of the desired state changes. Keys are domain-specific
+            attribute names; values are the proposed new values.
+        current_values:
+          type: object
+          additionalProperties: true
+          description: >-
+            Key-value map of the current state of the target entity. Provided by
+            the agent for delta comparison by validators and dimension evaluators.
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          default: 1.0
+          description: >-
+            Agent's self-reported confidence in this decision (0.0 = no confidence,
+            1.0 = full confidence). Used as a factor in criticality scoring.
+        rationale:
+          type: [string, "null"]
+          description: >-
+            Agent's human-readable explanation for why this action is proposed.
+            Forwarded to validators for context during consensus voting.
+
+    # --- Criticality ---
+
+    CriticalityLevel:
+      type: string
+      description: >-
+        Graduated criticality classification derived from the composite dimension
+        score. Determines the validation rigor applied: LOW receives log-only
+        pass-through, MEDIUM triggers automated bounds checking, HIGH requires
+        multi-validator consensus, and CRITICAL requires extended consensus with
+        supermajority agreement thresholds and longer timeouts.
+      enum: [LOW, MEDIUM, HIGH, CRITICAL]
+
+    CriticalityScore:
+      type: object
+      required: [composite, level]
+      properties:
+        composite:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: >-
+            Weighted composite score across all dimension evaluators (0.0 = no risk,
+            1.0 = maximum risk). Computed as the weighted sum of individual dimension
+            scores normalized by total weight.
+        level:
+          $ref: '#/components/schemas/CriticalityLevel'
+          description: Criticality level derived from composite score and configured thresholds
+        dimensions:
+          type: object
+          additionalProperties:
+            type: number
+            format: float
+          description: >-
+            Per-dimension risk scores (keys are dimension names, values are 0.0-1.0).
+            Useful for understanding which dimensions contributed most to the
+            composite score.
+
+    # --- Validation ---
+
+    ValidatorVerdict:
+      type: string
+      description: >-
+        The verdict issued by a validator during consensus voting. AGREE indicates
+        the validator approves the action. DISAGREE indicates the validator rejects
+        the action. UNCERTAIN indicates the validator cannot make a determination
+        (counted as neither agreement nor disagreement in consensus calculation).
+      enum: [AGREE, DISAGREE, UNCERTAIN]
+
+    ValidationOutcome:
+      type: string
+      description: >-
+        Final outcome of the validation pipeline. EXECUTED means the action is
+        approved without modification. EXECUTED_MASKED means the action proceeds
+        but with sensitive fields redacted or constrained (e.g., data masked,
+        scope limited). WARN means the action proceeds but is flagged for
+        post-hoc review. BLOCKED means the action is rejected and MUST NOT
+        execute. ESCALATED means the action is held pending explicit approval
+        (human operator or approval workflow MUST release it). CONFLICT_RESOLVED
+        means a conflict was detected and this action lost priority.
+        TIMED_OUT means validators did not respond and the action was held.
+      enum: [EXECUTED, EXECUTED_MASKED, WARN, BLOCKED, ESCALATED, CONFLICT_RESOLVED, TIMED_OUT]
+
+    ViolationType:
+      type: string
+      description: >-
+        Classification of why an action was blocked or escalated. BOUNDS_EXCEEDED
+        indicates a proposed value exceeds configured safe bounds. VALIDATION_FAILED
+        indicates validator consensus rejected the action. CONSENSUS_NOT_REACHED
+        indicates insufficient validator responses. CONFLICT_UNRESOLVED indicates a
+        conflict that could not be resolved. TEMPORAL_PATTERN_DETECTED indicates
+        suspicious action patterns (bursts, cross-agent correlation).
+      enum:
+        - BOUNDS_EXCEEDED
+        - VALIDATION_FAILED
+        - CONSENSUS_NOT_REACHED
+        - CONFLICT_UNRESOLVED
+        - TEMPORAL_PATTERN_DETECTED
+
+    ValidationResponse:
+      type: object
+      required: [validator, verdict]
+      properties:
+        validator:
+          $ref: '#/components/schemas/AgentIdentity'
+          description: Identity of the validator that issued this verdict
+        verdict:
+          $ref: '#/components/schemas/ValidatorVerdict'
+          description: The validator's verdict on the proposed action
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          default: 1.0
+          description: >-
+            Validator's confidence in its verdict (0.0 = uncertain, 1.0 = fully
+            confident). Used as a weight in consensus calculation.
+        rationale:
+          type: [string, "null"]
+          description: >-
+            Human-readable explanation of why the validator issued this verdict.
+            Included in the decision record for audit purposes.
+        response_time_ms:
+          type: [number, "null"]
+          description: >-
+            Time in milliseconds the validator took to respond. Measured by the
+            engine from request dispatch to response receipt.
+
+    ValidationRequest:
+      type: object
+      required: [action, criticality]
+      properties:
+        action:
+          $ref: '#/components/schemas/ProposedAction'
+          description: The proposed action to validate
+        criticality:
+          $ref: '#/components/schemas/CriticalityScore'
+          description: >-
+            Pre-computed criticality score from the dimension evaluation phase.
+            Validators MAY use this to calibrate their assessment.
+      description: >-
+        Payload sent by the engine to validator callbacks during the consensus
+        voting phase. Contains the full proposed action and its criticality assessment.
+
+    # --- Decision Record ---
+
+    DecisionRecord:
+      type: object
+      required: [decision_id, timestamp, proposed_action, criticality, outcome]
+      properties:
+        decision_id:
+          type: string
+          format: uuid
+          description: >-
+            Unique identifier for this decision record. Generated by the engine
+            upon validation completion.
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp when the decision was finalized
+        proposed_action:
+          $ref: '#/components/schemas/ProposedAction'
+          description: The original proposed action that was evaluated
+        criticality:
+          $ref: '#/components/schemas/CriticalityScore'
+          description: Criticality assessment computed during dimension evaluation
+        validation_responses:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationResponse'
+          description: >-
+            List of verdicts received from validators during consensus voting.
+            Empty for LOW and MEDIUM criticality actions that skip validation.
+        outcome:
+          $ref: '#/components/schemas/ValidationOutcome'
+          description: Final outcome of the validation pipeline
+        violation_type:
+          oneOf:
+            - $ref: '#/components/schemas/ViolationType'
+            - type: 'null'
+          description: >-
+            Type of violation if the action was BLOCKED or ESCALATED. Null for
+            EXECUTED and CONFLICT_RESOLVED outcomes.
+        conflict_with:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: >-
+            List of action IDs that conflicted with this action (targeting the
+            same entity within the detection window). Empty if no conflict.
+        processing_time_ms:
+          type: [number, "null"]
+          description: >-
+            Total time in milliseconds from action submission to decision
+            finalization. Includes dimension evaluation, validation, and
+            resolution phases.
+        rationale:
+          type: [string, "null"]
+          description: >-
+            Engine-generated human-readable explanation of the decision outcome.
+            Summarizes why the action was approved, blocked, or escalated.
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: >-
+            Engine's confidence in this decision (0.0 = low confidence / ambiguous,
+            1.0 = high confidence / deterministic rule match). Derived from the
+            strength of evidence: number of validators responding, dimension
+            coverage, and pattern match quality.
+        recommended_alternative:
+          type: [object, "null"]
+          description: >-
+            When an action is BLOCKED or WARN, the engine MAY suggest a safer
+            alternative that achieves a similar outcome within policy bounds.
+            Null if no alternative is available.
+          required: [description, proposed_values]
+          properties:
+            description:
+              type: string
+              description: Human-readable explanation of the safer alternative
+            proposed_values:
+              type: object
+              additionalProperties: true
+              description: >-
+                Suggested parameter values that would pass validation
+            rationale:
+              type: string
+              description: Why this alternative is safer
+        safety_invariant_triggered:
+          type: boolean
+          default: false
+          description: >-
+            True if the decision was influenced by a fail-safe invariant (e.g.,
+            all evaluators unreachable, validator timeout, internal error).
+            When true, the decision errs on the side of caution and the
+            rationale field explains which invariant was triggered.
+        execution_constraints:
+          type: [object, "null"]
+          description: >-
+            Present when outcome is EXECUTED_MASKED. Defines the constraints
+            under which the action MAY proceed. The executing system MUST
+            enforce these constraints before applying the action.
+          required: [masked_fields]
+          properties:
+            masked_fields:
+              type: array
+              items:
+                type: string
+              description: >-
+                List of field paths in proposed_values that MUST be redacted
+                or replaced with masked values before execution.
+            scope_restriction:
+              type: [string, "null"]
+              description: >-
+                If present, the action MUST be limited to this scope
+                (e.g., "read-only", "single-cell", "non-production").
+            max_values:
+              type: object
+              additionalProperties: true
+              description: >-
+                Upper bounds on proposed values. The executing system MUST
+                clamp values to these maximums.
+        approval:
+          type: [object, "null"]
+          description: >-
+            Present when outcome is ESCALATED. Provides context for the
+            approval workflow that MUST release this action.
+          required: [approval_id, reason, expires_at]
+          properties:
+            approval_id:
+              type: string
+              format: uuid
+              description: Unique identifier for this approval request
+            reason:
+              type: string
+              description: Why approval is required
+            approver_roles:
+              type: array
+              items:
+                type: string
+              description: >-
+                Roles authorized to approve this action (e.g., "network_operator",
+                "security_admin")
+            expires_at:
+              type: string
+              format: date-time
+              description: >-
+                Deadline for approval. If not approved by this time, the action
+                is automatically BLOCKED.
+
+    DecisionListResponse:
+      type: object
+      required: [decisions, total]
+      properties:
+        decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/DecisionRecord'
+          description: Array of decision records matching the query criteria
+        total:
+          type: integer
+          description: Total number of matching records across all pages (for pagination UI)
+        next_cursor:
+          type: [string, "null"]
+          description: >-
+            Opaque cursor for retrieving the next page of results. Null if this
+            is the last page. Pass this value in the `cursor` query parameter.
+
+    # --- Async ---
+
+    AsyncValidationResponse:
+      type: object
+      required: [decision_id, status, poll_url]
+      properties:
+        decision_id:
+          type: string
+          format: uuid
+          description: >-
+            Unique identifier for the pending decision. Use this to retrieve the
+            final result via GET /decisions/{decision_id}.
+        status:
+          type: string
+          enum: [PENDING, COMPLETED]
+          description: >-
+            Current status of the asynchronous validation. PENDING indicates
+            the validation is still in progress; COMPLETED indicates the
+            decision has been finalized.
+        poll_url:
+          type: string
+          format: uri
+          description: >-
+            Full URL to poll for the decision result. Equivalent to
+            GET /decisions/{decision_id}. Clients SHOULD use exponential backoff
+            when polling (recommended interval: 500ms initial, 2x backoff, max 5s).
+
+    # --- Policy ---
+
+    AegisPolicy:
+      type: object
+      properties:
+        version:
+          type: string
+          default: "1.0"
+          description: >-
+            Schema version of the policy document. Used for forward-compatible
+            policy evolution. Current version is "1.0".
+        level_thresholds:
+          $ref: '#/components/schemas/LevelThresholds'
+          description: >-
+            Composite score thresholds that determine criticality level boundaries.
+        consensus:
+          $ref: '#/components/schemas/ConsensusConfig'
+          description: >-
+            Configuration for multi-validator consensus voting per criticality level.
+        temporal:
+          $ref: '#/components/schemas/TemporalConfig'
+          description: >-
+            Configuration for temporal pattern detection (burst, cross-agent, cooldown).
+        conflict:
+          $ref: '#/components/schemas/ConflictConfig'
+          description: >-
+            Configuration for conflict detection and resolution strategy.
+
+    LevelThresholds:
+      type: object
+      properties:
+        medium:
+          type: number
+          default: 0.3
+          description: >-
+            Composite score at or above which an action is classified as MEDIUM
+            criticality. Actions below this threshold are LOW.
+        high:
+          type: number
+          default: 0.6
+          description: >-
+            Composite score at or above which an action is classified as HIGH
+            criticality, triggering multi-validator consensus.
+        critical:
+          type: number
+          default: 0.85
+          description: >-
+            Composite score at or above which an action is classified as CRITICAL,
+            triggering extended consensus with higher agreement requirements.
+
+    ConsensusConfig:
+      type: object
+      properties:
+        high_min_validators:
+          type: integer
+          default: 2
+          description: >-
+            Minimum number of validators that MUST respond for HIGH criticality
+            decisions. If fewer are available, the action is ESCALATED.
+        high_agreement_threshold:
+          type: number
+          default: 0.5
+          description: >-
+            Fraction of responding validators that MUST AGREE for HIGH criticality
+            consensus (0.0-1.0). Values above this threshold result in EXECUTED.
+        high_timeout_ms:
+          type: integer
+          default: 3000
+          description: >-
+            Maximum time in milliseconds to wait for validator responses on HIGH
+            criticality decisions before computing consensus with available votes.
+        critical_min_validators:
+          type: integer
+          default: 3
+          description: >-
+            Minimum number of validators that MUST respond for CRITICAL decisions.
+            If fewer are available, the action is ESCALATED.
+        critical_agreement_threshold:
+          type: number
+          default: 0.67
+          description: >-
+            Fraction of responding validators that MUST AGREE for CRITICAL
+            consensus (0.0-1.0). Higher than HIGH to ensure broader agreement.
+        critical_timeout_ms:
+          type: integer
+          default: 5000
+          description: >-
+            Maximum time in milliseconds to wait for validator responses on
+            CRITICAL decisions. Longer than HIGH to maximize participation.
+
+    TemporalConfig:
+      type: object
+      properties:
+        window_size_seconds:
+          type: integer
+          default: 300
+          description: >-
+            Sliding window size in seconds for burst detection. Actions from a
+            single agent exceeding burst_threshold within this window trigger an alert.
+        burst_threshold:
+          type: integer
+          default: 5
+          description: >-
+            Maximum number of actions from a single agent within the window before
+            a burst pattern is detected and flagged.
+        cross_agent_window_seconds:
+          type: integer
+          default: 600
+          description: >-
+            Window size in seconds for detecting coordinated cross-agent patterns
+            targeting the same entity or entity type.
+        cooldown_seconds:
+          type: integer
+          default: 60
+          description: >-
+            Mandatory cooldown period in seconds after a temporal pattern is
+            detected. Actions during cooldown receive elevated criticality.
+
+    ConflictConfig:
+      type: object
+      properties:
+        detection_window_seconds:
+          type: integer
+          default: 30
+          description: >-
+            Time window in seconds within which concurrent actions targeting
+            the same entity are considered potentially conflicting.
+        allow_concurrent_on_same_target:
+          type: boolean
+          default: false
+          description: >-
+            Whether to allow multiple concurrent actions on the same target entity.
+            If false (default), concurrent actions MUST trigger conflict resolution.
+        resolution_strategy_url:
+          type: string
+          format: uri
+          description: |
+            Endpoint for external resolution strategy (HTTP binding). If null,
+            the engine uses its built-in criticality-weighted strategy. For
+            alternative transports, use implementation-specific configuration.
+
+    # --- Extension Registrations ---
+
+    DimensionRegistration:
+      type: object
+      required: [name, weight]
+      properties:
+        name:
+          type: string
+          description: >-
+            Unique dimension name (e.g., "service_impact", "cost", "safety").
+            Used as the key in CriticalityScore.dimensions.
+        weight:
+          type: number
+          format: float
+          minimum: 0.0
+          description: >-
+            Relative weight of this dimension in composite scoring. Weights are
+            normalized across all registered dimensions. Higher weight means
+            greater influence on the composite score.
+        callback_url:
+          type: string
+          format: uri
+          description: >-
+            HTTP endpoint the engine invokes for evaluation. Required for HTTP
+            transport binding. Null if using an alternative transport (gRPC,
+            in-process, message queue).
+        transport:
+          type: string
+          default: http
+          description: >-
+            Transport binding for this evaluator. Implementations MUST support
+            "http". Additional transports are implementation-defined.
+          examples:
+            - http
+            - grpc
+            - in-process
+            - nats
+        description:
+          type: [string, "null"]
+          description: >-
+            Human-readable description of what this dimension evaluates.
+            Displayed in management interfaces and audit logs.
+        timeout_ms:
+          type: integer
+          default: 100
+          description: >-
+            Maximum time in milliseconds to wait for this evaluator's response.
+            If exceeded, the dimension score defaults to 0.0 (no risk).
+
+    DimensionScore:
+      type: object
+      required: [score]
+      properties:
+        score:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: >-
+            Risk score for this dimension (0.0 = no risk, 1.0 = maximum risk).
+            The engine multiplies this by the dimension weight for composite calculation.
+        confidence:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          default: 1.0
+          description: >-
+            Evaluator's confidence in this score (0.0 = low confidence,
+            1.0 = fully confident). May be used by the engine for weighted averaging.
+        rationale:
+          type: [string, "null"]
+          description: >-
+            Human-readable explanation of the score. Included in the decision
+            record for audit and debugging purposes.
+        metadata:
+          type: object
+          additionalProperties: true
+          description: >-
+            Domain-specific metadata for audit logging. Opaque to the engine but
+            stored in the decision record for post-hoc analysis.
+
+    ValidatorRegistration:
+      type: object
+      required: [agent]
+      properties:
+        agent:
+          $ref: '#/components/schemas/AgentIdentity'
+          description: Identity of the validator agent being registered
+        callback_url:
+          type: string
+          format: uri
+          description: >-
+            HTTP endpoint the engine invokes for validation. Required for HTTP
+            transport binding. Null if using an alternative transport.
+        transport:
+          type: string
+          default: http
+          description: >-
+            Transport binding for this validator. Implementations MUST support
+            "http". Additional transports are implementation-defined.
+          examples:
+            - http
+            - grpc
+            - in-process
+            - nats
+        timeout_ms:
+          type: integer
+          default: 3000
+          description: >-
+            Maximum time in milliseconds to wait for this validator's response.
+            If exceeded, the validator is excluded from consensus and the timeout
+            is logged. This is an engine-internal timeout — not a validator verdict.
+        supported_action_types:
+          type: array
+          items:
+            type: string
+          description: >-
+            Action types this validator handles. If empty or omitted, the
+            validator is invoked for all action types.
+
+    # --- Conflict Resolution ---
+
+    ConflictResolutionRequest:
+      type: object
+      required: [target_entity, candidates]
+      properties:
+        target_entity:
+          type: string
+          description: >-
+            Entity ID where the conflict occurred. All candidate actions target
+            this same entity.
+        candidates:
+          type: array
+          minItems: 2
+          items:
+            type: object
+            required: [action, criticality]
+            properties:
+              action:
+                $ref: '#/components/schemas/ProposedAction'
+                description: One of the conflicting proposed actions
+              criticality:
+                $ref: '#/components/schemas/CriticalityScore'
+                description: Pre-computed criticality score for this candidate action
+          description: >-
+            List of conflicting actions (minimum 2) that the resolver MUST
+            choose between. Each includes the full action and its criticality.
+
+    ConflictResolutionResponse:
+      type: object
+      required: [winner_action_id]
+      properties:
+        winner_action_id:
+          type: string
+          format: uuid
+          description: >-
+            The action_id of the winning action. This action will be EXECUTED
+            (or proceed to validation); all others will be BLOCKED with
+            violation_type CONFLICT_UNRESOLVED.
+        rationale:
+          type: [string, "null"]
+          description: >-
+            Human-readable explanation of why this action was chosen as the
+            winner. Stored in the decision records for audit.
+
+    # --- Monitoring ---
+
+    PipelineStats:
+      type: object
+      properties:
+        total_decisions:
+          type: integer
+          description: Total number of decisions processed since engine startup
+        by_level:
+          type: object
+          additionalProperties:
+            type: integer
+          description: >-
+            Decision count broken down by criticality level. Keys are criticality
+            level names (LOW, MEDIUM, HIGH, CRITICAL); values are counts.
+        by_outcome:
+          type: object
+          additionalProperties:
+            type: integer
+          description: >-
+            Decision count broken down by outcome. Keys are outcome names
+            (EXECUTED, BLOCKED, etc.); values are counts.
+        blocked_count:
+          type: integer
+          description: Total number of BLOCKED decisions (convenience field)
+        avg_processing_time_ms:
+          type: number
+          description: >-
+            Average processing time in milliseconds across all decisions since
+            engine startup. Includes all pipeline phases.
+        uptime_seconds:
+          type: number
+          description: Engine uptime in seconds since last restart
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: >-
+            Aggregate health status. 'healthy' means all subsystems operational.
+            'degraded' means some validators/dimensions are unreachable but the
+            engine can still process requests. 'unhealthy' means the engine cannot
+            reliably process validation requests.
+        validators_available:
+          type: integer
+          description: Number of registered validators currently reachable
+        dimensions_registered:
+          type: integer
+          description: Number of dimension evaluators currently registered
+        version:
+          type: string
+          description: Engine software version string (e.g., "0.1.0")
+
+    TemporalState:
+      type: object
+      properties:
+        active_events:
+          type: integer
+          description: Number of action events currently in the sliding detection window
+        unique_agents:
+          type: integer
+          description: Number of distinct agents with events in the current window
+        unique_targets:
+          type: integer
+          description: Number of distinct target entities with events in the current window
+        active_cooldowns:
+          type: integer
+          description: Number of agent-target pairs currently under cooldown restrictions
+        recent_patterns:
+          type: array
+          items:
+            type: object
+            properties:
+              pattern_type:
+                type: string
+                enum: [burst, cross_agent, synchronization]
+                description: >-
+                  Classification of the detected pattern. 'burst' is a single agent
+                  exceeding rate limits. 'cross_agent' is multiple agents targeting the
+                  same entity. 'synchronization' is coordinated timing across agents.
+              target_entity:
+                type: string
+                description: Entity ID where the pattern was detected
+              severity:
+                type: number
+                description: >-
+                  Severity score of the pattern (0.0-1.0). Higher values indicate
+                  more anomalous behavior.
+              detected_at:
+                type: string
+                format: date-time
+                description: Timestamp when this pattern was first detected
+              involved_agents:
+                type: array
+                items:
+                  type: string
+                description: List of agent IDs involved in this pattern
+          description: >-
+            Recently detected temporal patterns. Includes active patterns and
+            those still within the cooldown window.
+
+    # --- Events ---
+
+    EventSubscription:
+      type: object
+      required: [callback_url]
+      properties:
+        subscription_id:
+          type: string
+          format: uuid
+          description: >-
+            Unique identifier for this subscription. Auto-generated by the engine
+            on creation. Use this ID to delete the subscription.
+        callback_url:
+          type: string
+          format: uri
+          description: >-
+            Endpoint where the engine delivers decision event notifications
+            (HTTP binding). MUST respond within 3000ms.
+        filter:
+          type: object
+          properties:
+            outcomes:
+              type: array
+              items:
+                $ref: '#/components/schemas/ValidationOutcome'
+              description: >-
+                Only notify for these outcomes. If empty or omitted, notifications
+                are sent for all outcomes.
+            min_criticality_level:
+              $ref: '#/components/schemas/CriticalityLevel'
+              description: >-
+                Only notify for decisions at or above this criticality level.
+                If omitted, all levels are included.
+            agent_ids:
+              type: array
+              items:
+                type: string
+              description: >-
+                Only notify for decisions involving these agent IDs. If empty
+                or omitted, all agents are included.
+          description: >-
+            Filter criteria for this subscription. If no filter is specified,
+            the subscription receives all decision events.
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when this subscription was created (set by engine)
+
+    # --- Error ---
+
+    ProblemDetails:
+      type: object
+      description: >-
+        Error response conforming to RFC 7807 (Problem Details for HTTP APIs).
+        Provides machine-readable error classification and human-readable context.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: >-
+            URI reference identifying the problem type. Dereferencing this URI
+            SHOULD provide human-readable documentation for the problem type.
+          examples:
+            - "urn:aegis:error:validation-failed"
+            - "urn:aegis:error:rate-limited"
+            - "urn:aegis:error:precondition-failed"
+        title:
+          type: string
+          description: >-
+            Short human-readable summary of the problem type. Does not change
+            between occurrences of the same problem type.
+        status:
+          type: integer
+          description: HTTP status code generated by the origin server for this occurrence.
+        detail:
+          type: string
+          description: >-
+            Human-readable explanation specific to this occurrence of the problem.
+        instance:
+          type: string
+          format: uri
+          description: >-
+            URI reference identifying the specific occurrence. Useful for
+            log correlation.
+        cause:
+          type: string
+          description: >-
+            Machine-readable application error cause specific to this occurrence.
+            Stable across versions — clients MAY switch on this value.
+          examples:
+            - INVALID_ACTION
+            - POLICY_VIOLATION
+            - VALIDATOR_TIMEOUT
+            - DIMENSION_UNREACHABLE
+            - RATE_LIMITED
+            - UNAUTHORIZED
+            - FORBIDDEN
+            - PRECONDITION_FAILED
+        invalidParams:
+          type: array
+          items:
+            $ref: '#/components/schemas/InvalidParam'
+          description: >-
+            Array of field-level validation errors. Present when the request
+            body or query parameters contain invalid values.
+        request_id:
+          type: string
+          format: uuid
+          description: >-
+            The X-Request-ID associated with this failed request.
+
+    InvalidParam:
+      type: object
+      required: [param, reason]
+      properties:
+        param:
+          type: string
+          description: >-
+            JSON pointer or query parameter name identifying the invalid field.
+        reason:
+          type: string
+          description: >-
+            Human-readable explanation of why the parameter value is invalid.
